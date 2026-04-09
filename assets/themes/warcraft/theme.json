@@ -1,0 +1,164 @@
+{
+  "meta": {
+    "name": "Warcraft",
+    "slug": "warcraft",
+    "version": "1.0.0",
+    "description": "Fantasy organic. War drums, horn brass, stone cavern reverb.",
+    "accent_color": "#ff4444",
+    "greeting_template": "Work complete. {summary}",
+    "sonic_dna": {
+      "frequency_range": "100-2000Hz",
+      "instrument_palette": [
+        "sine_drum",
+        "triangle_horn",
+        "noise_wood"
+      ],
+      "emotional_tone": "fantasy_organic",
+      "reverb": "stone_cavern"
+    }
+  },
+  "semantic_sounds": {
+    "session_start": {
+      "variants": [
+        "session-start-01.wav",
+        "session-start-02.wav",
+        "session-start-03.wav"
+      ],
+      "duration_ms": 800,
+      "priority": 0,
+      "mode": "overlap",
+      "category": "earcon"
+    },
+    "session_end": {
+      "variants": [
+        "session-end-01.wav",
+        "session-end-02.wav",
+        "session-end-03.wav"
+      ],
+      "duration_ms": 500,
+      "priority": 0,
+      "mode": "overlap",
+      "category": "earcon"
+    },
+    "task_complete": {
+      "variants": [
+        "task-complete-01.wav",
+        "task-complete-02.wav",
+        "task-complete-03.wav"
+      ],
+      "duration_ms": 400,
+      "priority": 1,
+      "mode": "overlap",
+      "category": "earcon"
+    },
+    "prompt_ack": {
+      "variants": [
+        "prompt-ack-01.wav",
+        "prompt-ack-02.wav",
+        "prompt-ack-03.wav"
+      ],
+      "duration_ms": 150,
+      "priority": 0,
+      "mode": "debounce",
+      "category": "earcon"
+    },
+    "agent_deploy": {
+      "variants": [
+        "agent-deploy-01.wav",
+        "agent-deploy-02.wav",
+        "agent-deploy-03.wav"
+      ],
+      "duration_ms": 350,
+      "priority": 0,
+      "mode": "overlap",
+      "category": "earcon"
+    },
+    "agent_return": {
+      "variants": [
+        "agent-return-01.wav",
+        "agent-return-02.wav",
+        "agent-return-03.wav"
+      ],
+      "duration_ms": 350,
+      "priority": 1,
+      "mode": "overlap",
+      "category": "earcon"
+    },
+    "error": {
+      "variants": [
+        "error-01.wav",
+        "error-02.wav",
+        "error-03.wav"
+      ],
+      "duration_ms": 350,
+      "priority": 2,
+      "mode": "interrupt",
+      "category": "notification"
+    },
+    "notification": {
+      "variants": [
+        "notification-01.wav",
+        "notification-02.wav",
+        "notification-03.wav"
+      ],
+      "duration_ms": 400,
+      "priority": 2,
+      "mode": "interrupt",
+      "category": "notification"
+    },
+    "commit": {
+      "variants": [
+        "commit-01.wav",
+        "commit-02.wav",
+        "commit-03.wav"
+      ],
+      "duration_ms": 600,
+      "priority": 1,
+      "mode": "overlap",
+      "category": "earcon"
+    },
+    "permission": {
+      "variants": [
+        "permission-01.wav",
+        "permission-02.wav",
+        "permission-03.wav"
+      ],
+      "duration_ms": 300,
+      "priority": 2,
+      "mode": "interrupt",
+      "category": "notification"
+    },
+    "compact": {
+      "variants": [
+        "compact-01.wav",
+        "compact-02.wav",
+        "compact-03.wav"
+      ],
+      "duration_ms": 250,
+      "priority": 0,
+      "mode": "overlap",
+      "category": "earcon"
+    },
+    "ambient": {
+      "variants": [
+        "ambient-loop.wav"
+      ],
+      "duration_ms": 3000,
+      "priority": 0,
+      "mode": "interrupt",
+      "category": "ambient"
+    }
+  },
+  "tts": {
+    "voice_id": null,
+    "greeting_template": "Work complete. {summary}",
+    "personality_modifiers": {
+      "tone": "gruff_peon",
+      "cadence": "measured"
+    }
+  },
+  "visual_sync": {
+    "tmux_theme": "warcraft",
+    "accent_color": "#ff4444"
+  }
+}

@@ -1,0 +1,212 @@
+{
+  "meta": {
+    "name": "Default",
+    "slug": "default",
+    "version": "1.0.0",
+    "description": "Clean, professional notification sounds for Claude Code",
+    "sonic_dna": {
+      "frequency_range": "400-2000Hz",
+      "instrument_palette": [
+        "sine",
+        "triangle",
+        "soft_noise"
+      ],
+      "emotional_tone": "professional_calm",
+      "reverb": "light_room"
+    }
+  },
+  "semantic_sounds": {
+    "session_start": {
+      "variants": [
+        "session-start-01.wav",
+        "session-start-02.wav",
+        "session-start-03.wav"
+      ],
+      "duration_ms": 600,
+      "priority": 0,
+      "mode": "overlap",
+      "category": "earcon"
+    },
+    "session_end": {
+      "variants": [
+        "session-end-01.wav",
+        "session-end-02.wav",
+        "session-end-03.wav"
+      ],
+      "duration_ms": 400,
+      "priority": 0,
+      "mode": "overlap",
+      "category": "earcon"
+    },
+    "task_complete": {
+      "variants": [
+        "task-complete-01.wav",
+        "task-complete-02.wav",
+        "task-complete-03.wav"
+      ],
+      "duration_ms": 300,
+      "priority": 1,
+      "mode": "overlap",
+      "category": "earcon"
+    },
+    "prompt_ack": {
+      "variants": [
+        "prompt-ack-01.wav",
+        "prompt-ack-02.wav",
+        "prompt-ack-03.wav"
+      ],
+      "duration_ms": 150,
+      "priority": 0,
+      "mode": "debounce",
+      "category": "earcon"
+    },
+    "agent_deploy": {
+      "variants": [
+        "agent-deploy-01.wav",
+        "agent-deploy-02.wav",
+        "agent-deploy-03.wav"
+      ],
+      "duration_ms": 250,
+      "priority": 0,
+      "mode": "overlap",
+      "category": "earcon"
+    },
+    "agent_return": {
+      "variants": [
+        "agent-return-01.wav",
+        "agent-return-02.wav",
+        "agent-return-03.wav"
+      ],
+      "duration_ms": 300,
+      "priority": 1,
+      "mode": "overlap",
+      "category": "earcon"
+    },
+    "error": {
+      "variants": [
+        "error-01.wav",
+        "error-02.wav",
+        "error-03.wav"
+      ],
+      "duration_ms": 250,
+      "priority": 2,
+      "mode": "interrupt",
+      "category": "notification"
+    },
+    "notification": {
+      "variants": [
+        "notification-01.wav",
+        "notification-02.wav",
+        "notification-03.wav"
+      ],
+      "duration_ms": 300,
+      "priority": 2,
+      "mode": "interrupt",
+      "category": "notification"
+    },
+    "commit": {
+      "variants": [
+        "commit-01.wav",
+        "commit-02.wav",
+        "commit-03.wav"
+      ],
+      "duration_ms": 500,
+      "priority": 1,
+      "mode": "overlap",
+      "category": "earcon"
+    },
+    "permission": {
+      "variants": [
+        "permission-01.wav",
+        "permission-02.wav",
+        "permission-03.wav"
+      ],
+      "duration_ms": 200,
+      "priority": 2,
+      "mode": "interrupt",
+      "category": "notification"
+    },
+    "compact": {
+      "variants": [
+        "compact-01.wav",
+        "compact-02.wav",
+        "compact-03.wav"
+      ],
+      "duration_ms": 200,
+      "priority": 0,
+      "mode": "overlap",
+      "category": "earcon"
+    },
+    "ambient": {
+      "variants": [
+        "ambient-loop.wav"
+      ],
+      "duration_ms": 3000,
+      "priority": 0,
+      "mode": "interrupt",
+      "category": "ambient"
+    }
+  },
+  "hook_to_sound": {
+    "SessionStart": "session_start",
+    "SessionEnd": "session_end",
+    "Stop": "task_complete",
+    "SubagentStart": "agent_deploy",
+    "SubagentStop": "agent_return",
+    "PostToolUseFailure": "error",
+    "Notification": "notification",
+    "PermissionRequest": "permission",
+    "PreCompact": "compact",
+    "UserPromptSubmit": "prompt_ack"
+  },
+  "content_aware_overrides": {
+    "Stop": {
+      "patterns": {
+        "(?i)git commit|committed|Created commit|pushed to": "commit",
+        "(?i)tests? passed|All.*pass|\\d+ passed": "task_complete",
+        "(?i)installed|upgraded|updated.*package|Successfully installed": "task_complete",
+        "(?i)wrote.*file|created.*file|File written|Saved to": "task_complete",
+        "(?i)warning|Warning|WARN|deprecated": "notification",
+        "(?i)\\berror\\b|\\bfailed\\b|\\bexception\\b|\\btraceback\\b": "error"
+      }
+    }
+  },
+  "tts": {
+    "voice_id": null,
+    "greeting_template": "{summary}",
+    "personality_modifiers": {}
+  },
+  "visual_sync": {
+    "tmux_theme": "default",
+    "accent_color": "#a6e3a1"
+  },
+  "agent_sounds": {
+    "matt": {
+      "select": "sounds/agents/matt-select.wav",
+      "acknowledge": "sounds/agents/matt-acknowledge.wav",
+      "complete": "sounds/agents/matt-complete.wav",
+      "error": "sounds/agents/matt-error.wav",
+      "voice_id": "am_onyx"
+    },
+    "darren": {
+      "select": "sounds/agents/darren-select.wav",
+      "acknowledge": "sounds/agents/darren-acknowledge.wav",
+      "complete": "sounds/agents/darren-complete.wav",
+      "error": "sounds/agents/darren-error.wav",
+      "voice_id": "am_adam"
+    },
+    "philipp": {
+      "select": "sounds/agents/philipp-select.wav",
+      "acknowledge": "sounds/agents/philipp-acknowledge.wav",
+      "complete": "sounds/agents/philipp-complete.wav",
+      "error": "sounds/agents/philipp-error.wav",
+      "voice_id": "af_river"
+    },
+    "_default": {
+      "select": "sounds/agents/_default-select.wav",
+      "acknowledge": "sounds/agents/_default-acknowledge.wav",
+      "complete": "sounds/agents/_default-complete.wav",
+      "error": "sounds/agents/_default-error.wav"
+    }
+  }
+}

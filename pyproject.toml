@@ -1,0 +1,21 @@
+[project]
+name = "claude-voice"
+version = "0.1.0"
+description = "Gamified audio feedback for Claude Code"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+dependencies = []
+
+[project.optional-dependencies]
+synthesis = ["numpy", "scipy"]
+tts = ["elevenlabs"]
+stt = ["faster-whisper"]
+all = ["numpy", "scipy", "elevenlabs", "faster-whisper"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
+
+[tool.marimo]
+watcher_on_save = "autorun"

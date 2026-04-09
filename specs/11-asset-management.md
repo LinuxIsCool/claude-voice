@@ -1,0 +1,1117 @@
+---
+title: "Asset Management — Library Structure, Generation Pipeline & Versioning"
+spec: "11"
+status: draft
+created: 2026-03-26
+author: matt
+tags: [claude-voice, assets, sounds, pipeline, versioning]
+---
+
+# 11 — Asset Management
+
+## 1. Overview
+
+The asset management system owns the lifecycle of all sound files in claude-voice: generation, validation, cataloging, serving, and versioning. Assets are git-tracked WAV files organized by theme. The system ensures every `theme.json` reference resolves to a valid, quality-checked audio file.
+
+This spec sits between the synthesis pipeline (spec 03) and the theme engine (spec 02). Spec 03 defines how individual waveforms are computed. Spec 02 defines how `theme.json` references sounds by semantic token. This spec defines everything in between: where files live on disk, how they get there, how they're validated, how they're cataloged, how they're served to the playback engine, and how they evolve over time.
+
+The core contract: if `theme.json` lists a variant filename, that file exists at the expected path, matches the expected format (48kHz 16-bit stereo WAV), and passes all quality gates. The asset management system enforces this contract at generation time, validates it on demand, and reports violations clearly.
+
+---
+
+## 2. Directory Structure
+
+```
+assets/
+├── themes/
+│   ├── default/
+│   │   ├── theme.json           # Theme definition (semantic sounds, sonic DNA, hook mapping)
+│   │   └── sounds/
+│   │       ├── boot-01.wav
+│   │       ├── boot-02.wav
+│   │       ├── boot-03.wav
+│   │       ├── shutdown-01.wav
+│   │       ├── shutdown-02.wav
+│   │       ├── shutdown-03.wav
+│   │       ├── ack-01.wav
+│   │       ├── ack-02.wav
+│   │       ├── ack-03.wav
+│   │       ├── ack-04.wav
+│   │       ├── ack-05.wav
+│   │       ├── complete-01.wav
+│   │       ├── complete-02.wav
+│   │       ├── complete-03.wav
+│   │       ├── complete-04.wav
+│   │       ├── complete-05.wav
+│   │       ├── deploy-01.wav
+│   │       ├── deploy-02.wav
+│   │       ├── deploy-03.wav
+│   │       ├── return-01.wav
+│   │       ├── return-02.wav
+│   │       ├── return-03.wav
+│   │       ├── error-01.wav
+│   │       ├── error-02.wav
+│   │       ├── error-03.wav
+│   │       ├── alert-01.wav
+│   │       ├── alert-02.wav
+│   │       ├── alert-03.wav
+│   │       ├── levelup-01.wav
+│   │       ├── levelup-02.wav
+│   │       ├── levelup-03.wav
+│   │       ├── attention-01.wav
+│   │       ├── attention-02.wav
+│   │       ├── attention-03.wav
+│   │       ├── compress-01.wav
+│   │       ├── compress-02.wav
+│   │       ├── compress-03.wav
+│   │       └── ambient-loop.wav
+│   ├── starcraft/
+│   │   ├── theme.json
+│   │   └── sounds/
+│   │       └── ... (48 files — 12 events × 3-5 variants + ambient)
+│   ├── warcraft/
+│   │   ├── theme.json
+│   │   └── sounds/
+│   │       └── ...
+│   ├── mario/
+│   │   ├── theme.json
+│   │   └── sounds/
+│   │       └── ...
+│   ├── zelda/
+│   │   ├── theme.json
+│   │   └── sounds/
+│   │       └── ...
+│   ├── smash/
+│   │   ├── theme.json
+│   │   └── sounds/
+│   │       └── ...
+│   └── kingdom-hearts/
+│       ├── theme.json
+│       └── sounds/
+│           └── ...
+├── catalog.json                 # Generated asset catalog (metadata index)
+└── .asset-checksums             # SHA256 checksums for integrity verification
+```
+
+### Annotations
+
+**Git-tracked**: Yes for everything in `assets/`. WAV files, `theme.json` files, `catalog.json`, and `.asset-checksums` are all committed. The entire asset directory is under 5MB total (see section 11 for the storage budget). This is well within the range where git-tracking binary files is practical and preferable to external artifact storage. There is no LFS, no external CDN, no download-on-install step. Clone the repo, and you have all sounds.
+
+**Naming convention**: Filenames in `sounds/` follow the strict pattern defined in section 3. The event prefix in the filename corresponds to the variant filename listed in `theme.json`'s `semantic_sounds` entries (e.g., `boot-01.wav` is listed under `session_start.variants`). The mapping from semantic token to filename prefix is theme-specific — StarCraft's `session_start` uses `boot-*.wav`, but another theme could use `startup-*.wav`. The theme.json is the authority.
+
+**Why flat `sounds/` directory (not nested by event category)**: Three reasons. First, there are only 36-48 files per theme — a flat directory is trivially scannable by humans and tools. Second, nesting by event category (e.g., `sounds/earcon/boot-01.wav`, `sounds/notification/error-01.wav`) would duplicate information already present in `theme.json`'s category field. Third, `theme.json` variant arrays reference bare filenames (`"boot-01.wav"`), not paths. A flat directory means the resolution is always `sounds/{filename}` — no path construction, no ambiguity.
+
+**`catalog.json` and `.asset-checksums` live at `assets/` root**: They span all themes. They are regenerated by the generation pipeline and committed alongside the WAV files.
+
+---
+
+## 3. Naming Convention
+
+Every sound file follows a strict naming pattern:
+
+```
+{event}-{NN}.wav
+
+Where:
+  {event}  = sound event token in kebab-case (matches variant filenames in theme.json)
+  {NN}     = zero-padded 2-digit variant number (01-99)
+
+Examples:
+  boot-01.wav
+  boot-02.wav
+  boot-03.wav
+  complete-01.wav
+  complete-03.wav
+  error-01.wav
+  ack-04.wav
+  ambient-loop.wav        (special case: ambient is a single file, not numbered)
+```
+
+### Rules
+
+1. **All lowercase.** No uppercase letters anywhere in filenames.
+
+2. **Hyphens only.** No underscores, no spaces, no dots except the `.wav` extension. The hyphen before the variant number is required.
+
+3. **Event prefix matches theme.json variant entries.** If `theme.json` lists `"boot-01.wav"` under `session_start.variants`, the file is named `boot-01.wav`. The event prefix (`boot`) is defined per-theme — it does not need to match the semantic token name (`session_start`). This allows themes to use evocative names: StarCraft uses `boot`, Mario might use `startup`, Zelda might use `awaken`.
+
+4. **Variant numbers start at 01.** No `00`. Numbers are always 2 digits: `01` through `99`. This allows natural sort order and easy globbing (`boot-*.wav`).
+
+5. **No theme prefix in filenames.** The theme is the directory. A file in `starcraft/sounds/` is a StarCraft sound — the filename does not repeat this. Never `starcraft-boot-01.wav`. Just `boot-01.wav`.
+
+6. **Ambient loop is special.** The ambient sound uses `ambient-loop.wav` without a variant number because there is exactly one ambient file per theme (it loops continuously, so variants are unnecessary). If a theme has no ambient sound, the file simply does not exist and the `ambient` entry is omitted from `theme.json`.
+
+7. **Extension is always `.wav`.** The output format is 48kHz 16-bit stereo PCM WAV (as specified in spec 03, section 2). No `.ogg`, no `.mp3`, no `.flac`. WAV is the canonical distribution format because: zero decode overhead at playback time, PipeWire passes PCM directly to the hardware, and the files are small enough that compression savings are irrelevant.
+
+### Validation Regex
+
+```python
+import re
+
+FILENAME_PATTERN = re.compile(
+    r'^[a-z][a-z0-9]*(?:-[a-z0-9]+)*-(?:\d{2}|loop)\.wav$'
+)
+
+def is_valid_filename(name: str) -> bool:
+    """Check if a sound filename matches the naming convention."""
+    return bool(FILENAME_PATTERN.match(name))
+```
+
+This matches: `boot-01.wav`, `ack-05.wav`, `ambient-loop.wav`, `complete-12.wav`.
+This rejects: `Boot-01.wav`, `boot_01.wav`, `starcraft-boot-01.wav`, `boot-1.wav`, `boot-01.ogg`.
+
+---
+
+## 4. Asset Catalog (`catalog.json`)
+
+The asset catalog is a generated metadata index that provides fast lookups without reading WAV headers, supports integrity verification, and serves as the primary input for generation reports and dashboards.
+
+### Schema
+
+```json
+{
+  "generated": "2026-03-26T01:30:00-07:00",
+  "generator_version": "1.0.0",
+  "total_files": 324,
+  "total_size_bytes": 3670016,
+  "themes": {
+    "starcraft": {
+      "file_count": 48,
+      "size_bytes": 565248,
+      "events": {
+        "boot": {
+          "semantic_token": "session_start",
+          "variants": 4,
+          "files": [
+            {
+              "filename": "boot-01.wav",
+              "size_bytes": 57600,
+              "duration_ms": 600,
+              "sample_rate": 48000,
+              "channels": 2,
+              "bit_depth": 16,
+              "peak_db": -3.2,
+              "rms_db": -12.4,
+              "checksum": "sha256:a7f3b2c1d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1"
+            },
+            {
+              "filename": "boot-02.wav",
+              "size_bytes": 58112,
+              "duration_ms": 605,
+              "sample_rate": 48000,
+              "channels": 2,
+              "bit_depth": 16,
+              "peak_db": -3.1,
+              "rms_db": -11.8,
+              "checksum": "sha256:b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9"
+            },
+            {
+              "filename": "boot-03.wav",
+              "size_bytes": 57088,
+              "duration_ms": 594,
+              "sample_rate": 48000,
+              "channels": 2,
+              "bit_depth": 16,
+              "peak_db": -3.0,
+              "rms_db": -12.1,
+              "checksum": "sha256:c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0"
+            },
+            {
+              "filename": "boot-04.wav",
+              "size_bytes": 57856,
+              "duration_ms": 602,
+              "sample_rate": 48000,
+              "channels": 2,
+              "bit_depth": 16,
+              "peak_db": -3.3,
+              "rms_db": -12.6,
+              "checksum": "sha256:d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1"
+            }
+          ]
+        },
+        "ack": {
+          "semantic_token": "prompt_ack",
+          "variants": 5,
+          "files": [
+            {
+              "filename": "ack-01.wav",
+              "size_bytes": 14400,
+              "duration_ms": 150,
+              "sample_rate": 48000,
+              "channels": 2,
+              "bit_depth": 16,
+              "peak_db": -3.0,
+              "rms_db": -14.2,
+              "checksum": "sha256:e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2"
+            }
+          ]
+        }
+      }
+    },
+    "default": {
+      "file_count": 37,
+      "size_bytes": 430080,
+      "events": {}
+    }
+  }
+}
+```
+
+### Field Definitions
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `generated` | ISO 8601 datetime | When the catalog was last generated |
+| `generator_version` | semver string | Version of `generate_sounds.py` that produced these assets |
+| `total_files` | int | Sum of all WAV files across all themes |
+| `total_size_bytes` | int | Sum of all WAV file sizes |
+| `themes.{slug}.file_count` | int | Number of WAV files in this theme |
+| `themes.{slug}.size_bytes` | int | Total size of WAV files in this theme |
+| `themes.{slug}.events.{prefix}` | object | Metadata for one event prefix within a theme |
+| `events.{prefix}.semantic_token` | string | The semantic token in theme.json that references these files |
+| `events.{prefix}.variants` | int | Number of variant files for this event |
+| `events.{prefix}.files[].filename` | string | Bare filename (no path) |
+| `events.{prefix}.files[].size_bytes` | int | File size from `os.path.getsize()` |
+| `events.{prefix}.files[].duration_ms` | int | Audio duration computed from sample count and sample rate |
+| `events.{prefix}.files[].sample_rate` | int | Sample rate from WAV header (expected: 48000) |
+| `events.{prefix}.files[].channels` | int | Channel count from WAV header (expected: 2) |
+| `events.{prefix}.files[].bit_depth` | int | Bits per sample from WAV header (expected: 16) |
+| `events.{prefix}.files[].peak_db` | float | Peak amplitude in dBFS: `20 * log10(max_abs_sample / 32767)` |
+| `events.{prefix}.files[].rms_db` | float | RMS level in dBFS: `20 * log10(rms / 32767)` |
+| `events.{prefix}.files[].checksum` | string | `sha256:{hex_digest}` of the entire file |
+
+### Purpose
+
+1. **Fast lookups without reading WAV headers.** The playback engine (spec 05) and theme engine (spec 02) can query `catalog.json` for duration, format, and variant count without parsing binary WAV data. In practice, `theme.json` already has `duration_ms` — the catalog serves as ground-truth verification of those declared values.
+
+2. **Integrity verification.** Checksums in the catalog match those in `.asset-checksums`. If a file is modified outside the generation pipeline (manual edit, corruption, incomplete git checkout), the verification command detects it.
+
+3. **Generation reports.** The `--report` flag on the generation script formats catalog data into a human-readable inventory: file counts per theme, total size, duration distributions, quality gate pass rates.
+
+4. **Cross-referencing with theme.json.** The catalog builder cross-references every variant filename in every `theme.json` against the actual files on disk. Missing files, extra files (not referenced by any theme.json), and naming convention violations are all reported.
+
+---
+
+## 5. Generation Pipeline
+
+The generation pipeline is the end-to-end process that transforms theme definitions and synthesis recipes into validated, cataloged WAV files.
+
+### Pipeline Steps
+
+```
+Step 1: Parse CLI arguments
+  - --theme <slug>     Generate for one theme only (default: all themes)
+  - --event <token>    Generate one semantic event only (default: all events)
+  - --variants <N>     Override variant count (default: per theme.json)
+  - --seed <int>       Random seed for reproducibility (default: 42)
+  - --force            Overwrite existing files (default: skip existing)
+  - --validate         Validate existing assets only (no generation)
+  - --catalog          Regenerate catalog.json only (no generation)
+  - --verify           Verify checksums only (no generation)
+  - --report           Print asset inventory report (no generation)
+  - --dry-run          Show what would be generated without writing files
+
+Step 2: Discover themes
+  - Scan assets/themes/ for directories containing theme.json
+  - Parse each theme.json, validate against schema
+  - If --theme specified, filter to that one theme
+  - Sort themes: default first, then alphabetical
+
+Step 3: Load sonic DNA
+  - Read theme.json meta.sonic_dna for each theme
+  - sonic_dna defines: frequency_range, instrument_palette,
+    cultural_reference, emotional_tone, reverb character
+  - These parameters feed into the synthesis recipe selection
+
+Step 4: For each theme, for each semantic sound in semantic_sounds:
+  Step 4a: Determine synthesis recipe
+    - Look up the event's base recipe from the recipe registry
+    - Apply theme-specific overrides from sonic_dna
+    - Recipe defines: base waveform type, frequency, duration,
+      ADSR parameters, effects chain, variant transforms
+
+  Step 4b: Generate base waveform
+    - Use numpy + scipy synthesis primitives (spec 03, section 3)
+    - Combine oscillators, noise, sweeps per the recipe
+    - Apply ADSR envelope (spec 03, section 3f)
+    - Result: float64 array in [-1.0, 1.0], mono
+
+  Step 4c: Apply effects chain
+    - Reverb (convolution or algorithmic)
+    - Filtering (low-pass, high-pass, band-pass via scipy.signal)
+    - Modulation (tremolo, vibrato if specified)
+    - Stereo widening (slight L/R delay or decorrelation)
+    - Order defined per recipe
+
+  Step 4d: Normalize
+    - Peak normalize to -3dB (multiply by 0.708 / max_abs)
+    - This leaves headroom for playback mixing and prevents clipping
+
+  Step 4e: Convert to output format
+    - Duplicate mono to stereo (or apply stereo widening from 4c)
+    - Quantize float64 to int16
+    - Write as 48kHz 16-bit stereo WAV
+
+  Step 4f: Validate against quality gates (section 6)
+    - If any gate fails with "Regenerate" action, retry with adjusted parameters
+    - Maximum 3 retries before hard failure
+
+  Step 4g: Generate variants
+    - For each variant index (01 through N, where N is 3-7 per theme.json):
+      - Apply variant transform to the base waveform
+      - Transforms: pitch shift (±50-200 cents), time stretch (±5-15%),
+        filter variation (cutoff wobble), amplitude micro-variation (±1dB)
+      - Variant 01 is the base waveform (no transform)
+      - Each subsequent variant gets a deterministic transform
+        seeded by (theme_hash, event_hash, variant_index, global_seed)
+      - Validate each variant against quality gates
+      - Write to assets/themes/{theme}/sounds/{event}-{NN}.wav
+
+Step 5: Generate catalog.json
+  - Walk all theme directories
+  - Read WAV headers and compute metadata for every file
+  - Cross-reference against theme.json variant lists
+  - Write assets/catalog.json
+
+Step 6: Generate .asset-checksums
+  - Compute SHA256 for every WAV file
+  - Write assets/.asset-checksums
+
+Step 7: Print summary report
+  - Files generated / skipped / failed per theme
+  - Total size
+  - Quality gate pass/warn/fail counts
+  - Duration distribution (min, max, mean, median)
+  - Wall-clock time for generation
+```
+
+### CLI Interface
+
+```bash
+# Generate all themes, all events
+uv run scripts/generate_sounds.py
+
+# Generate one theme
+uv run scripts/generate_sounds.py --theme starcraft
+
+# Generate one event across all themes
+uv run scripts/generate_sounds.py --event session_start
+
+# Generate one theme, one event
+uv run scripts/generate_sounds.py --theme starcraft --event session_start
+
+# Force overwrite existing files
+uv run scripts/generate_sounds.py --theme starcraft --force
+
+# Validate existing assets without generating
+uv run scripts/generate_sounds.py --validate
+
+# Validate one theme
+uv run scripts/generate_sounds.py --validate --theme starcraft
+
+# Regenerate catalog only (no sound generation)
+uv run scripts/generate_sounds.py --catalog
+
+# Verify checksums against .asset-checksums
+uv run scripts/generate_sounds.py --verify
+
+# Print asset inventory report
+uv run scripts/generate_sounds.py --report
+
+# Dry run — show plan without writing files
+uv run scripts/generate_sounds.py --dry-run
+
+# Set explicit random seed (default: 42)
+uv run scripts/generate_sounds.py --seed 42
+```
+
+### PEP 723 Script Header
+
+```python
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["numpy>=1.26", "scipy>=1.12"]
+# ///
+```
+
+This makes the script self-contained. `uv run scripts/generate_sounds.py` installs numpy and scipy into an ephemeral virtual environment if they are not already available. No `pyproject.toml` dependency management needed for generation.
+
+### Deterministic Output
+
+The generation pipeline produces identical output for identical inputs. This is enforced by:
+
+1. **Explicit random seed.** All numpy random calls use `np.random.default_rng(seed)` where `seed` is the `--seed` argument (default: 42). No calls to `np.random.seed()` or global random state.
+
+2. **Deterministic variant transforms.** Each variant's transform parameters are computed from a hash of `(theme_slug, event_prefix, variant_index, global_seed)`, not from sequential random draws. This means adding a new theme does not change the variants of existing themes.
+
+3. **Sorted iteration.** Themes are processed in alphabetical order (default first). Events are processed in the order they appear in `theme.json`'s `semantic_sounds` dict (which is insertion-ordered in Python 3.7+, and the JSON files use a consistent order).
+
+Delete every WAV file and rerun — you get byte-identical output. This is critical for git: regeneration should not produce spurious diffs.
+
+---
+
+## 6. Quality Gates
+
+Every generated asset must pass the following quality gates before being written to disk. User-provided overrides (section 12) are validated with warnings instead of errors.
+
+| Gate | Check | Pass Criteria | Fail Action |
+|------|-------|---------------|-------------|
+| Format | WAV header parse | Valid RIFF/WAVE container, PCM encoding | Regenerate |
+| Sample rate | WAV header `nSamplesPerSec` | Exactly 48000 Hz | Regenerate |
+| Bit depth | WAV header `wBitsPerSample` | Exactly 16 | Regenerate |
+| Channels | WAV header `nChannels` | Exactly 2 (stereo) | Regenerate |
+| Duration | `num_frames / sample_rate` | Within +/-20% of `theme.json` `duration_ms` target | Regenerate |
+| Peak amplitude | `max(abs(samples)) / 32767` | <= 1.0 (no clipping, i.e., no sample at +32767 or -32768) | Regenerate |
+| Peak level | `20 * log10(peak)` | Between -6dB and -1dB (normalized but not too quiet) | Regenerate |
+| RMS level | `20 * log10(rms(samples) / 32767)` | Between -20dB and -6dB | Warn (may be intentional for quiet sounds) |
+| File size | `os.path.getsize()` | < 200KB for earcons, < 1MB for ambient | Error |
+| Stereo balance | `abs(rms(left) - rms(right))` in dB | Within 6dB | Warn |
+| DC offset | `abs(mean(samples))` | < 0.01 (in float scale where 1.0 = max) | Fix (subtract mean, then re-normalize) |
+| Leading silence | Samples below -60dB threshold at start | < 20ms (960 samples at 48kHz) | Trim (remove leading silence, re-write) |
+| Trailing silence | Samples below -60dB threshold at end | < 50ms (2400 samples at 48kHz) | Trim (remove trailing silence, re-write) |
+| Filename | Regex match against naming convention | Matches `^[a-z][a-z0-9]*(?:-[a-z0-9]+)*-(?:\d{2}\|loop)\.wav$` | Error (do not write file) |
+| Theme.json reference | Filename appears in parent theme's `semantic_sounds` variants | At least one semantic token references this file | Warn (orphan file) |
+
+### Gate Implementation
+
+```python
+from dataclasses import dataclass
+from enum import Enum
+from typing import Optional
+
+class GateResult(Enum):
+    PASS = "pass"
+    WARN = "warn"
+    FAIL = "fail"
+
+@dataclass
+class GateCheck:
+    gate: str
+    result: GateResult
+    message: str
+    measured_value: Optional[float] = None
+    expected_range: Optional[str] = None
+
+def validate_asset(wav_path: Path, expected_duration_ms: int,
+                   category: str) -> list[GateCheck]:
+    """Run all quality gates on a single WAV file. Returns list of gate results."""
+    results = []
+    # ... gate implementations ...
+    return results
+```
+
+### Retry Logic
+
+When a generated file fails a quality gate with "Regenerate" action:
+
+1. Log the failure with full context (gate name, measured value, expected range).
+2. Adjust synthesis parameters: if peak level is too high, reduce gain by 1dB; if duration is off, scale the time parameter; if DC offset is present, add a DC-removal step to the effects chain.
+3. Regenerate with adjusted parameters.
+4. Re-validate.
+5. Maximum 3 retries. After 3 failures, log as hard error and skip this file. The summary report will flag it.
+
+---
+
+## 7. Integrity Verification
+
+The `.asset-checksums` file provides a fast, offline integrity check for all WAV assets.
+
+### Format
+
+```
+sha256:a7f3b2c1d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1 assets/themes/default/sounds/boot-01.wav
+sha256:b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9 assets/themes/default/sounds/boot-02.wav
+sha256:c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0 assets/themes/default/sounds/boot-03.wav
+sha256:d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1 assets/themes/starcraft/sounds/boot-01.wav
+sha256:e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2 assets/themes/starcraft/sounds/boot-02.wav
+```
+
+One line per file. Format: `sha256:{64_hex_chars} {relative_path_from_assets_root}`. Paths use forward slashes. File is sorted by path for deterministic diffs.
+
+### Verification Command
+
+```bash
+uv run scripts/generate_sounds.py --verify
+```
+
+This command:
+
+1. Reads `.asset-checksums` line by line.
+2. For each entry, computes the SHA256 of the file at the given path.
+3. Compares computed checksum against recorded checksum.
+4. Reports results:
+
+```
+Verifying asset integrity...
+  OK   324/324 files match checksums
+  MISS 0 files missing from disk
+  DIFF 0 files with changed checksums
+  NEW  0 files on disk not in checksums
+
+Verification: PASS
+```
+
+Or on failure:
+
+```
+Verifying asset integrity...
+  OK   322/324 files match checksums
+  MISS 0 files missing from disk
+  DIFF 2 files with changed checksums:
+    assets/themes/starcraft/sounds/boot-01.wav
+      expected: sha256:a7f3b2c1d4e5...
+      actual:   sha256:ff01ab23cd45...
+    assets/themes/starcraft/sounds/boot-02.wav
+      expected: sha256:b8c9d0e1f2a3...
+      actual:   sha256:1234567890ab...
+  NEW  0 files on disk not in checksums
+
+Verification: FAIL (2 mismatches)
+  Run --generate --theme starcraft to regenerate, or --catalog to update checksums.
+```
+
+### When to Verify
+
+- After `git pull` (to confirm a clean checkout)
+- Before committing generated assets (to confirm nothing drifted)
+- As a CI check (if CI is ever added)
+- On demand via `--verify`
+
+Verification is not run automatically at hook runtime. It is a development-time and maintenance operation. The hooks trust that committed assets are correct.
+
+---
+
+## 8. Asset Serving
+
+At runtime, the hook process needs to resolve a semantic sound token to a concrete WAV file path. This is the serving layer — the interface between the theme engine (spec 02) and the audio playback engine (spec 05).
+
+### Resolution Function
+
+```python
+import json
+import random
+from pathlib import Path
+from typing import Optional
+
+# PLUGIN_ROOT is set by Claude Code at runtime via CLAUDE_PLUGIN_ROOT env var
+PLUGIN_ROOT = Path(os.environ.get("CLAUDE_PLUGIN_ROOT", "."))
+ASSETS_DIR = PLUGIN_ROOT / "assets" / "themes"
+
+# In-memory cache: populated once per hook process invocation
+_theme_cache: dict[str, dict] = {}
+
+def _load_theme(theme_slug: str) -> dict:
+    """Load and cache a theme.json. Cached for process lifetime."""
+    if theme_slug not in _theme_cache:
+        theme_path = ASSETS_DIR / theme_slug / "theme.json"
+        if not theme_path.exists():
+            raise FileNotFoundError(f"Theme not found: {theme_slug}")
+        with open(theme_path) as f:
+            _theme_cache[theme_slug] = json.load(f)
+    return _theme_cache[theme_slug]
+
+def resolve_sound(theme_slug: str, sound_token: str) -> Optional[Path]:
+    """Resolve a semantic sound token to a WAV file path.
+
+    Steps:
+    1. Load theme.json (from cache if already loaded this process)
+    2. Look up the semantic token in semantic_sounds
+    3. Get the variants list
+    4. Select a random variant
+    5. Construct the full file path
+    6. Verify the file exists
+    7. Return the path, or None if resolution fails at any step
+
+    Args:
+        theme_slug: Theme directory name (e.g., "starcraft", "default")
+        sound_token: Semantic sound token (e.g., "session_start", "error")
+
+    Returns:
+        Path to a WAV file, or None if the token or file cannot be resolved
+    """
+    try:
+        theme = _load_theme(theme_slug)
+    except FileNotFoundError:
+        return None
+
+    semantic_sounds = theme.get("semantic_sounds", {})
+    sound_def = semantic_sounds.get(sound_token)
+    if sound_def is None:
+        return None
+
+    variants = sound_def.get("variants", [])
+    if not variants:
+        return None
+
+    # Random variant selection (uniform distribution)
+    selected = random.choice(variants)
+
+    # Construct path: assets/themes/{theme}/sounds/{filename}
+    sound_path = ASSETS_DIR / theme_slug / "sounds" / selected
+    if not sound_path.exists():
+        return None
+
+    return sound_path
+```
+
+### Theme Inheritance at Serving Time
+
+If a sound token is not found in the requested theme, fall back to default:
+
+```python
+def resolve_sound_with_fallback(theme_slug: str, sound_token: str) -> Optional[Path]:
+    """Resolve sound with fallback to default theme."""
+    path = resolve_sound(theme_slug, sound_token)
+    if path is not None:
+        return path
+
+    # Fallback to default theme
+    if theme_slug != "default":
+        return resolve_sound("default", sound_token)
+
+    return None
+```
+
+This implements the theme inheritance described in spec 02, section 2.4. If StarCraft's `theme.json` does not define a `compact` sound, the default theme's `compact` variants are used.
+
+### Caching Strategy
+
+`theme.json` is parsed once per hook process invocation and cached in-memory via the `_theme_cache` dict. A single hook invocation (e.g., handling a `Stop` event) loads at most 2 theme files (the active theme + default for fallback). Parsing a JSON file of ~5KB takes under 1ms. The cache is never invalidated — the process exits after handling the event (~45ms total lifetime), and the next event starts a fresh process with a fresh cache.
+
+There is no persistent cache, no memcached, no Redis, no file-based cache. The hook process lifecycle is too short to benefit from cross-invocation caching, and the overhead of maintaining a persistent cache would exceed the cost of re-parsing JSON.
+
+---
+
+## 9. Lazy Loading vs. Preloading
+
+**Decision: No preloading. Lazy loading via the OS page cache.**
+
+### Rationale
+
+WAV files in claude-voice are small: 10-80KB for earcons, up to ~200KB for the longest sounds. On an NVMe SSD (this machine: Samsung NVMe on PCIe 4.0), reading 80KB from cold storage takes approximately 0.1ms (IOPS-bound, not throughput-bound). After the first read, the OS page cache holds the file in memory, and subsequent reads are memory-mapped at effectively zero cost.
+
+The hook process lifetime is ~45ms (spec 04). The sound playback command (`pw-play`) is launched asynchronously — the hook process does not wait for playback to complete. The only I/O in the critical path is:
+
+1. Read `theme.json` (~5KB) — ~0.05ms from page cache
+2. Read the selected WAV file path (just `stat()` to verify existence) — ~0.01ms
+3. Pass the path to `pw-play` via `subprocess.Popen()` — ~2ms for fork+exec
+
+The WAV file data itself is read by `pw-play`, not by the hook process. `pw-play` reads the file in its own process, and PipeWire's backend handles buffering.
+
+### Why Not Preload
+
+Preloading would mean reading all WAV files into memory at some point before they are needed. This could be:
+
+- **At session start**: Load all variants for the active theme into a shared memory segment. This adds 0.5-2MB of resident memory and ~10ms of startup overhead. For a 45ms hook process that plays one sound, this is a 22% latency increase for zero benefit — the process does not reuse the preloaded data.
+- **Via a persistent daemon**: A long-running process holds all sounds in memory and serves them via IPC. This contradicts the stateless hook architecture (spec 04) and adds a daemon to monitor, restart, and debug.
+- **Via tmpfs/ramfs**: Copy all WAV files to `/tmp` at session start. Pointless — the NVMe is already fast enough, and the OS page cache achieves the same effect automatically.
+
+None of these approaches are worth the complexity. The files are small, the storage is fast, and the OS page cache is free.
+
+### Memory Footprint
+
+The hook process allocates approximately:
+
+- Python interpreter: ~15MB (shared with other Python processes via COW)
+- `theme.json` parsed dict: ~10KB
+- File path strings: ~200 bytes
+- No WAV data held in memory
+
+Total unique memory per hook invocation: < 1MB above the Python baseline. This is negligible.
+
+---
+
+## 10. Versioning Strategy
+
+### Git as Version Control
+
+All assets are committed to the plugin's git repository (`legion-plugins`). This includes WAV files, `theme.json` files, `catalog.json`, and `.asset-checksums`. Git serves as both version control and the distribution mechanism.
+
+### How It Works
+
+- **Generation creates files.** Running `generate_sounds.py` writes WAV files into `assets/themes/*/sounds/`.
+- **Overwrite, not append.** Regeneration overwrites existing files at the same paths. There is no versioned filename scheme (no `boot-01-v2.wav`).
+- **Git tracks binary diffs.** Git stores WAV files as binary blobs. `git diff` shows that a file changed but cannot show what changed in the audio. This is acceptable — the changes are documented by the commit message and by the diff in `catalog.json` (which shows any changes in duration, peak level, RMS, file size).
+- **`catalog.json` shows human-readable diffs.** When assets are regenerated, `catalog.json` changes. The JSON diff reveals exactly which files changed and how their metadata shifted. This is the human-readable changelog for asset changes.
+- **`.asset-checksums` shows which files changed.** The checksum file is sorted by path, so `git diff` on it shows exactly which files have new checksums.
+- **`generator_version` in `catalog.json` tracks the pipeline version.** Bump this field when the synthesis pipeline changes in a way that affects output (new primitives, changed defaults, quality gate adjustments).
+
+### No Per-File Version Numbers
+
+Individual sound files do not have version numbers. The variant number (`-01`, `-02`, `-03`) is a variant index, not a version. Version history lives in git. To see the previous version of `boot-01.wav`, check `git log -- assets/themes/starcraft/sounds/boot-01.wav`.
+
+### When to Regenerate
+
+| Trigger | Scope | Action |
+|---------|-------|--------|
+| Theme `sonic_dna` changes in `theme.json` | All sounds in that theme | `--theme {slug} --force` |
+| Synthesis recipe changes in `generate_sounds.py` | All sounds using that recipe | `--force` (full regen) |
+| Quality gate thresholds change | All sounds | `--validate` first, then `--force` on failures |
+| New semantic event added to `theme.json` | New event in affected themes | `--event {token}` (generates only the new event) |
+| New theme added | All sounds in the new theme | `--theme {slug}` |
+| Bug fix in synthesis primitives | Potentially all sounds | `--force` (full regen), compare `catalog.json` diff |
+| Variant count changed in `theme.json` | Affected event in affected theme | `--theme {slug} --event {token} --force` |
+
+### Commit Workflow
+
+```bash
+# 1. Make changes to synthesis recipes or theme.json
+# 2. Regenerate affected assets
+uv run scripts/generate_sounds.py --theme starcraft --force
+
+# 3. Verify all assets are valid
+uv run scripts/generate_sounds.py --validate
+
+# 4. Review what changed
+git diff assets/catalog.json    # Shows metadata changes
+git diff assets/.asset-checksums # Shows which files changed
+
+# 5. Commit
+git add assets/
+git commit -m "Regenerate StarCraft assets: adjusted boot sweep frequency range"
+```
+
+---
+
+## 11. Storage Budget
+
+All calculations assume the output format from spec 03: 48kHz, 16-bit, stereo PCM WAV.
+
+### Per-File Size Formula
+
+```
+size_bytes = sample_rate * channels * bytes_per_sample * duration_seconds + 44
+           = 48000 * 2 * 2 * duration_seconds + 44
+           = 192000 * duration_seconds + 44
+
+(44 bytes = WAV header)
+```
+
+### Size Estimates
+
+| Duration | Category | File Size | Example Events |
+|----------|----------|-----------|----------------|
+| 100ms | Ultra-short | ~19KB | ack, compact |
+| 150ms | Short | ~29KB | tool_start, tool_end, attention |
+| 200ms | Short | ~38KB | error, alert, deploy |
+| 300ms | Medium | ~58KB | complete, return, levelup |
+| 500ms | Medium-long | ~96KB | commit (levelup) |
+| 600ms | Long | ~115KB | boot (session_start) |
+| 800ms | Long | ~154KB | boot for orchestral themes |
+| 30s | Ambient loop | ~5.5MB | ambient-loop.wav |
+
+### Per-Theme Budget
+
+Using the StarCraft theme as reference (from spec 02 theme.json):
+
+| Event | Duration | Variants | Size per Variant | Subtotal |
+|-------|----------|----------|-----------------|----------|
+| session_start (boot) | 600ms | 4 | 115KB | 460KB |
+| session_end (shutdown) | 400ms | 3 | 77KB | 231KB |
+| prompt_ack (ack) | 150ms | 5 | 29KB | 145KB |
+| task_complete (complete) | 300ms | 5 | 58KB | 290KB |
+| agent_deploy (deploy) | 250ms | 3 | 48KB | 144KB |
+| agent_return (return) | 300ms | 3 | 58KB | 174KB |
+| error | 250ms | 3 | 48KB | 144KB |
+| notification (alert) | 300ms | 3 | 58KB | 174KB |
+| commit (levelup) | 500ms | 3 | 96KB | 288KB |
+| permission (attention) | 200ms | 3 | 38KB | 114KB |
+| compact (compress) | 200ms | 3 | 38KB | 114KB |
+| ambient | 30s | 1 | 5.5MB | 5.5MB |
+| **Total without ambient** | | **39 files** | | **~2.3MB** |
+| **Total with ambient** | | **40 files** | | **~7.8MB** |
+
+### All-Themes Budget
+
+| Scenario | Per Theme | 7 Themes | Notes |
+|----------|-----------|----------|-------|
+| Earcons only (no ambient) | ~2.3MB | ~16MB | All 12 events, 3-5 variants each |
+| With ambient loops | ~7.8MB | ~55MB | Ambient adds ~5.5MB per theme |
+
+### Git Repo Impact
+
+**Without ambient**: ~16MB of WAV files across 7 themes. This is acceptable for a personal plugin repo. Git handles binary files without issue at this scale. The `.git` directory will grow by ~16MB per regeneration cycle (git stores full copies of binary files, not diffs). After 10 regeneration cycles, the repo grows by ~160MB — still manageable, and `git gc` compresses binary objects reasonably well.
+
+**With ambient loops**: ~55MB pushes toward the boundary of comfortable git storage. Options:
+
+1. **Commit ambient loops** — acceptable for a personal repo that is not frequently cloned by others.
+2. **Generate ambient on install** — do not commit ambient WAVs; regenerate them via a post-clone script. This keeps the repo at ~16MB.
+3. **Use OGG for ambient only** — compress 30s ambient loops from ~5.5MB WAV to ~500KB OGG. This reduces the ambient contribution from ~38.5MB to ~3.5MB, bringing the total to ~19.5MB. Requires the playback engine to handle OGG (via `pw-play`, which supports OGG natively via PipeWire's SPA plugins).
+
+Recommended: Option 3 (OGG for ambient loops) or Option 2 (generate on install). Decision deferred to open questions (section 15).
+
+---
+
+## 12. User-Provided Overrides
+
+Users can replace any generated sound with a custom WAV file. The override mechanism is simple: drop a file with the right name in the right directory.
+
+### How It Works
+
+1. **Same filename = user wins.** If a user places `boot-01.wav` in `assets/themes/starcraft/sounds/`, it overwrites the generated file. The next time `session_start` plays variant `boot-01.wav`, the user's file is what plays.
+
+2. **Generation skips existing files by default.** Running `generate_sounds.py` without `--force` will not overwrite any file that already exists on disk. This protects user-provided files from being clobbered by regeneration.
+
+3. **`--force` overwrites everything.** If the user wants to revert to generated sounds, `--force` regenerates all files, including those the user replaced. The user should back up custom files before using `--force`.
+
+4. **Custom files must match the naming convention.** A file named `my-cool-sound.wav` will not be picked up by any theme.json variant list. The user must name their file to match an existing variant entry (e.g., `boot-01.wav`) or add a new variant entry to `theme.json`.
+
+5. **Validation runs on user files too, but with warnings.** When `--validate` encounters a user-provided file that fails a quality gate (wrong sample rate, clipping, too long), it reports a warning — not an error. The rationale: the user knows their file best, and they may have intentional reasons for the "violation" (e.g., a longer boot sound). The warning ensures they are informed but not blocked.
+
+### Adding Extra Variants
+
+A user can add variants beyond what the generator creates:
+
+1. Place a new file: `boot-04.wav` (or `boot-05.wav`, etc.)
+2. Edit `theme.json` to add the new filename to the `session_start.variants` array
+3. The theme engine picks it up immediately (no restart needed)
+
+### `.gitignore` Considerations
+
+User overrides live in the same directory as generated files. There is no separate `custom/` directory. This means:
+
+- If the user commits their overrides, they persist across clones. Good.
+- If the user does not commit their overrides, `git status` shows them as modified files. They should add the specific files to `.gitignore` or use `git update-index --skip-worktree`.
+- The generation pipeline does not modify `.gitignore`. That is the user's responsibility.
+
+---
+
+## 13. Supplementary Asset Sources
+
+While the primary asset path is programmatic synthesis (spec 03), some sounds benefit from external sources. These are supplementary — they fill gaps where synthesis is not convincing (footsteps, impacts, voice-like acknowledgments, ambient textures).
+
+### Tier 1: Kenney.nl (CC0 — Best External Source)
+
+All Kenney audio packs are Creative Commons CC0 (public domain dedication). No attribution required, commercial use permitted, modification permitted.
+
+Relevant packs:
+
+| Pack | URL | Best For |
+|------|-----|----------|
+| Interface Sounds | `https://kenney.nl/assets/interface-sounds` | UI clicks, ack, compact |
+| UI Audio | `https://kenney.nl/assets/ui-audio` | Button/switch sounds |
+| Impact Sounds | `https://kenney.nl/assets/impact-sounds` | Error thuds, commit impacts |
+| RPG Audio | `https://kenney.nl/assets/rpg-audio` | Warcraft/Zelda foley |
+| Sci-fi Sounds | `https://kenney.nl/assets/sci-fi-sounds` | StarCraft theme |
+| Digital Audio | `https://kenney.nl/assets/digital-audio` | Digital beeps, scanner sounds |
+| Music Jingles | `https://kenney.nl/assets/music-jingles` | Boot jingles, success fanfares |
+
+### Tier 2: Freesound.org (Mixed Licenses)
+
+Freesound has 720,000+ sounds. Filter by CC0 license for maximum freedom. Check the license on every individual file — Freesound hosts CC0, CC-BY, CC-BY-NC, and CC Sampling+ content.
+
+Useful CC0 searches:
+- `https://freesound.org/search/?q=8+bit+ui&license=0`
+- `https://freesound.org/search/?q=retro+game+beep&license=0`
+- `https://freesound.org/search/?q=sci+fi+computer+beep&license=0`
+
+### Tier 3: OpenGameArt.org (CC0 and CC-BY)
+
+Notable CC0 packs:
+- RPG Sound Pack (artisticdude): 95 WAV files — `https://opengameart.org/content/rpg-sound-pack`
+- 512 Sound Effects 8-bit style: `https://opengameart.org/content/512-sound-effects-8-bit-style`
+- 8-bit Platformer SFX: `https://opengameart.org/content/8-bit-platformer-sfx`
+
+CC-BY 3.0 packs (require attribution):
+- Sci-Fi Sound Effects Library (Little Robot Sound Factory) — attribution: "Little Robot Sound Factory: www.littlerobotsoundfactory.com"
+- 8-Bit Sound Effects Library (Little Robot Sound Factory) — same attribution
+
+### Tier 4: ElevenLabs Sound Effects API
+
+Generate sounds via text prompt (e.g., "8-bit coin collect sound", "sci-fi computer startup beep"). Useful for rapid prototyping and for sounds that are hard to describe in synthesis parameters but easy to describe in words. Output must be converted to 48kHz 16-bit stereo WAV to match the format spec.
+
+### Tier 5: jsfxr / sfxr.me
+
+Browser-based retro sound generator at `https://sfxr.me/`. Export as WAV. No license restrictions on generated output. Good for quick prototyping of 8-bit/chiptune sounds (Mario, Zelda). Output must be resampled and converted to match format spec.
+
+### Integration Requirements
+
+All supplementary assets — regardless of source — must:
+
+1. Be converted to the canonical format: 48kHz, 16-bit, stereo PCM WAV
+2. Follow the naming convention (section 3)
+3. Pass all quality gates (section 6) — warnings for user-provided, errors for pipeline-provided
+4. Be referenced in the appropriate `theme.json` variant list
+5. Have their license documented in an `ATTRIBUTION.md` file at the plugin root (only needed for CC-BY sources; CC0 sources need no attribution but can be listed for provenance)
+
+### Conversion Pipeline for External Assets
+
+```bash
+# Convert any audio file to the canonical format
+ffmpeg -i input_file.ogg \
+  -ar 48000 \
+  -ac 2 \
+  -sample_fmt s16 \
+  -c:a pcm_s16le \
+  output.wav
+
+# Normalize to -3dB peak
+ffmpeg -i input.wav \
+  -af "loudnorm=I=-14:TP=-3:LRA=11" \
+  -ar 48000 -ac 2 -sample_fmt s16 -c:a pcm_s16le \
+  output_normalized.wav
+```
+
+---
+
+## 14. Migration Path
+
+From the current state (no assets, no directory structure) to a complete asset library.
+
+### Phase 1: Scaffold (< 5 minutes)
+
+Create the directory structure:
+
+```bash
+cd ~/.claude/plugins/local/legion-plugins/plugins/claude-voice
+
+# Create all theme directories
+for theme in default starcraft warcraft mario zelda smash kingdom-hearts; do
+  mkdir -p assets/themes/$theme/sounds
+done
+
+# Create empty catalog and checksums
+echo '{}' > assets/catalog.json
+touch assets/.asset-checksums
+```
+
+### Phase 2: Default Theme (1 hour)
+
+Generate the default theme first. This serves as:
+- The reference implementation for all quality gates
+- The fallback for any theme that does not define a sound
+- The template for testing the full pipeline end-to-end
+
+```bash
+uv run scripts/generate_sounds.py --theme default
+```
+
+The default theme uses clean, neutral sounds: sine tones, simple envelopes, no strong thematic flavor. It is the "system sounds" baseline — functional, unobtrusive, instantly recognizable.
+
+### Phase 3: StarCraft Theme (2 hours)
+
+StarCraft is the highest-priority game theme because:
+- The sonic vocabulary is well-defined (Terran command center, digital beeps, scanner sweeps)
+- The synthesis recipes are straightforward (sine + noise + sweep, no complex FM or chord voicings)
+- The research document (07-sound-asset-sources.md) has complete frequency specifications for all 12 events
+
+```bash
+uv run scripts/generate_sounds.py --theme starcraft
+```
+
+### Phase 4: Remaining Themes (4-6 hours)
+
+Generate the remaining 5 themes in order of synthesis complexity:
+
+1. **Mario** — square waves, chiptune character, well-known motifs. Simple synthesis.
+2. **Zelda** — sine waves with long decays, sparse, majestic intervals. Simple but needs reverb-like tails.
+3. **Smash** — orchestral hits, impact sounds, energetic. Needs layered transients.
+4. **Warcraft** — sawtooth brass, horn stabs, medieval character. Needs careful envelope work.
+5. **Kingdom Hearts** — FM synthesis bells, choir-like pads, piano arpeggios. Most complex synthesis.
+
+```bash
+uv run scripts/generate_sounds.py --theme mario
+uv run scripts/generate_sounds.py --theme zelda
+uv run scripts/generate_sounds.py --theme smash
+uv run scripts/generate_sounds.py --theme warcraft
+uv run scripts/generate_sounds.py --theme kingdom-hearts
+```
+
+### Phase 5: Validate and Catalog (< 5 minutes)
+
+```bash
+# Validate all assets across all themes
+uv run scripts/generate_sounds.py --validate
+
+# Generate the catalog and checksums
+uv run scripts/generate_sounds.py --catalog
+
+# Print the final report
+uv run scripts/generate_sounds.py --report
+```
+
+### Phase 6: Commit (< 5 minutes)
+
+```bash
+cd ~/.claude/plugins/local/legion-plugins
+git add plugins/claude-voice/assets/
+git commit -m "Add generated sound assets for all 7 themes"
+```
+
+### Total Estimated Time
+
+- Scaffold + default: ~1 hour
+- StarCraft: ~2 hours
+- Remaining 5 themes: ~4-6 hours
+- Validation + commit: ~10 minutes
+- **Total: 7-9 hours of development time**
+
+This is a single-developer estimate for writing the `generate_sounds.py` script and all 7 theme recipes. The actual generation (running the script) takes seconds — the time is in writing and tuning the synthesis recipes.
+
+---
+
+## 15. Open Questions
+
+These are unresolved design decisions that do not block initial implementation but need resolution before the asset library reaches 1.0.
+
+### Q1: Should ambient loops use OGG for size, or stay WAV for consistency?
+
+**Context**: A 30-second ambient loop at 48kHz stereo 16-bit WAV is ~5.5MB per file. Across 7 themes, that is ~38.5MB of ambient loops alone. OGG Vorbis at quality 4 compresses this to ~500KB per file (~3.5MB total).
+
+**Arguments for OGG**:
+- 11x size reduction for ambient files
+- `pw-play` supports OGG natively via PipeWire's SPA plugins
+- Ambient loops are less latency-sensitive (they start at session beginning, not on a user action)
+- The decode overhead (~2ms) is irrelevant for a looping background sound
+
+**Arguments for WAV**:
+- One format for all assets — simpler pipeline, simpler documentation, simpler validation
+- No dependency on OGG codec at playback time (though PipeWire includes it by default on most Linux distros)
+- Consistency: every quality gate, every catalog entry, every checksum works the same way
+
+**Leaning**: OGG for ambient, WAV for everything else. The size savings are too significant to ignore, and the latency argument does not apply to ambient loops.
+
+### Q2: Should `catalog.json` be committed to git, or generated on install?
+
+**Context**: `catalog.json` is a derived artifact — it can be regenerated from the WAV files at any time. Committing it to git means it diffs on every asset change (useful for review). Not committing it means one fewer binary-adjacent file in the repo.
+
+**Arguments for committing**:
+- `git diff assets/catalog.json` provides a human-readable summary of what changed in a regeneration
+- No post-clone generation step needed
+- The file is ~50KB (JSON, not binary) — diffs are clean and readable
+
+**Arguments for generating on install**:
+- Avoids potential staleness (catalog out of sync with actual files)
+- One less thing to remember to regenerate before committing
+
+**Leaning**: Commit it. The diff utility is worth the minor risk of staleness, and the `--validate` command catches staleness.
+
+### Q3: Should there be a `--preview` flag that plays each sound after generation?
+
+**Context**: During development, hearing each sound immediately after generation is valuable for tuning. A `--preview` flag would call `pw-play` on each generated WAV file with a short pause between sounds.
+
+**Arguments for**:
+- Dramatically speeds up the tuning feedback loop
+- No need to manually find and play files
+- Could be combined with `--theme` and `--event` to preview specific sounds
+
+**Arguments against**:
+- Adds a dependency on `pw-play` in the generation script (currently the script only needs numpy + scipy)
+- Preview of 300+ files takes several minutes — better to preview selectively
+
+**Leaning**: Yes, add `--preview`, but default to off. When combined with `--theme` and `--event`, it previews only the relevant sounds. Playing 3-5 variants of one event takes < 5 seconds.
+
+### Q4: Should asset generation be a pre-commit hook to ensure consistency?
+
+**Context**: A pre-commit hook could run `--validate` on all assets before allowing a commit that touches the `assets/` directory. This ensures no broken or invalid assets are committed.
+
+**Arguments for**:
+- Guarantees that committed assets always pass quality gates
+- Catches accidental commits of malformed files
+
+**Arguments against**:
+- Validation takes ~2-5 seconds (reading and checking all WAV headers) — adds to commit latency
+- False positives on user-provided overrides that intentionally violate gates
+- The `--validate` command already exists for manual use
+
+**Leaning**: No. Validation is a manual step (`--validate`), not an automated gate. The developer (Shawn or Legion) is responsible for running it before committing. A pre-commit hook adds friction without sufficient benefit for a single-developer plugin.

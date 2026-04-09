@@ -1,0 +1,164 @@
+{
+  "meta": {
+    "name": "StarCraft",
+    "slug": "starcraft",
+    "version": "1.0.0",
+    "description": "Digital military command interface. Square waves, radio chirps, scanner sweeps.",
+    "accent_color": "#00ff41",
+    "greeting_template": "Commander, {summary}",
+    "sonic_dna": {
+      "frequency_range": "800-6000Hz",
+      "instrument_palette": [
+        "square",
+        "fm_synth",
+        "noise_burst"
+      ],
+      "emotional_tone": "digital_military",
+      "reverb": "metallic_chamber"
+    }
+  },
+  "semantic_sounds": {
+    "session_start": {
+      "variants": [
+        "session-start-01.wav",
+        "session-start-02.wav",
+        "session-start-03.wav"
+      ],
+      "duration_ms": 500,
+      "priority": 0,
+      "mode": "overlap",
+      "category": "earcon"
+    },
+    "session_end": {
+      "variants": [
+        "session-end-01.wav",
+        "session-end-02.wav",
+        "session-end-03.wav"
+      ],
+      "duration_ms": 350,
+      "priority": 0,
+      "mode": "overlap",
+      "category": "earcon"
+    },
+    "task_complete": {
+      "variants": [
+        "task-complete-01.wav",
+        "task-complete-02.wav",
+        "task-complete-03.wav"
+      ],
+      "duration_ms": 250,
+      "priority": 1,
+      "mode": "overlap",
+      "category": "earcon"
+    },
+    "prompt_ack": {
+      "variants": [
+        "prompt-ack-01.wav",
+        "prompt-ack-02.wav",
+        "prompt-ack-03.wav"
+      ],
+      "duration_ms": 100,
+      "priority": 0,
+      "mode": "debounce",
+      "category": "earcon"
+    },
+    "agent_deploy": {
+      "variants": [
+        "agent-deploy-01.wav",
+        "agent-deploy-02.wav",
+        "agent-deploy-03.wav"
+      ],
+      "duration_ms": 200,
+      "priority": 0,
+      "mode": "overlap",
+      "category": "earcon"
+    },
+    "agent_return": {
+      "variants": [
+        "agent-return-01.wav",
+        "agent-return-02.wav",
+        "agent-return-03.wav"
+      ],
+      "duration_ms": 250,
+      "priority": 1,
+      "mode": "overlap",
+      "category": "earcon"
+    },
+    "error": {
+      "variants": [
+        "error-01.wav",
+        "error-02.wav",
+        "error-03.wav"
+      ],
+      "duration_ms": 200,
+      "priority": 2,
+      "mode": "interrupt",
+      "category": "notification"
+    },
+    "notification": {
+      "variants": [
+        "notification-01.wav",
+        "notification-02.wav",
+        "notification-03.wav"
+      ],
+      "duration_ms": 200,
+      "priority": 2,
+      "mode": "interrupt",
+      "category": "notification"
+    },
+    "commit": {
+      "variants": [
+        "commit-01.wav",
+        "commit-02.wav",
+        "commit-03.wav"
+      ],
+      "duration_ms": 400,
+      "priority": 1,
+      "mode": "overlap",
+      "category": "earcon"
+    },
+    "permission": {
+      "variants": [
+        "permission-01.wav",
+        "permission-02.wav",
+        "permission-03.wav"
+      ],
+      "duration_ms": 200,
+      "priority": 2,
+      "mode": "interrupt",
+      "category": "notification"
+    },
+    "compact": {
+      "variants": [
+        "compact-01.wav",
+        "compact-02.wav",
+        "compact-03.wav"
+      ],
+      "duration_ms": 150,
+      "priority": 0,
+      "mode": "overlap",
+      "category": "earcon"
+    },
+    "ambient": {
+      "variants": [
+        "ambient-loop.wav"
+      ],
+      "duration_ms": 3000,
+      "priority": 0,
+      "mode": "interrupt",
+      "category": "ambient"
+    }
+  },
+  "tts": {
+    "voice_id": null,
+    "greeting_template": "Commander, {summary}",
+    "personality_modifiers": {
+      "tone": "military_briefing",
+      "cadence": "clipped"
+    }
+  },
+  "visual_sync": {
+    "tmux_theme": "starcraft",
+    "accent_color": "#00ff41"
+  }
+}
