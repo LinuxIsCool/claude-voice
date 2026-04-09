@@ -529,7 +529,12 @@ class VoiceArbiter:
                 # Speaker transition delay — check BEFORE removing from heap.
                 # Leave msg in place; transition_until gates the whole function
                 # on the next tick, preventing livelock.
-                if self.last_speaker and self.last_speaker != msg.agent_id:
+                # Only apply when BOTH speakers are named agents (non-empty).
+                # Empty agent_id ("") means no persona — skip cooldown to avoid
+                # infinite loop where last_speaker="legion" != msg.agent_id=""
+                # resets the cooldown every 300ms forever.
+                if (self.last_speaker and msg.agent_id
+                        and self.last_speaker != msg.agent_id):
                     self.transition_until = time.time() + (self.cooldown_ms / 1000.0)
                     return False
 
